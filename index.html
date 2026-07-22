@@ -29,7 +29,7 @@
   <h2>Wireless Mic</h2>
   <input type="text" id="name" placeholder="Your Name">
   <button class="sing" id="micBtn" onclick="toggleMic()">Start Singing</button>
-  <button class="test" id="testBtn" onclick="sendMicTestSound()" style="display:none;">🔊 Mic Sound Test</button>
+  <button class="test" id="testBtn" onclick="streamTestTone()" style="display:none;">🔊 Play Sound on MacBook</button>
   <div id="meter">Mic Status: Ready</div>
   <button onclick="location.reload()" style="background:#444">Back</button>
 </div>
@@ -37,7 +37,7 @@
 <div id="receiver" class="view" style="width: 400px;">
   <h2>Speaker Hub</h2>
   <button class="listen" id="listenBtn" onclick="startListen()">Listening Live...</button>
-  <button class="test" onclick="playLocalTestSound()">🔊 Speaker Test Tone</button>
+  <button class="test" onclick="playLocalTone(440)">🔊 Speaker Test Tone</button>
   <div class="panel">
     <h3>Connected Singers</h3>
     <div id="list">None</div>
@@ -46,7 +46,7 @@
 </div>
 
 <script>
-let role = '', pc, stream, peerId = '', activePeers = new Map();
+let role = '', pc, stream, peerId = '', activePeers = new Map(), localAudioCtx;
 
 function setRole(r) {
   role = r;
@@ -55,12 +55,7 @@ function setRole(r) {
   if(r === 'listen') startListen();
 }
 
-// Local Speaker Test
-function playLocalTestSound() {
-  playTone(440);
-}
-
-function playTone(freq) {
+function playLocalTone(freq) {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const osc = ctx.createOscillator();
@@ -72,6 +67,35 @@ function playTone(freq) {
     gain.connect(ctx.destination);
     osc.start();
     osc.stop(ctx.currentTime + 0.6);
+  } catch(e) {}
+}
+
+// Stream a test tone down the WebRTC track so the MacBook plays it out loud
+function streamTestTone() {
+  if (!stream) return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const dst = ctx.createMediaStreamDestination();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    osc.connect(gain);
+    gain.connect(dst);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.8);
+
+    // Temporarily replace microphone stream with test tone on the peer connection
+    const audioTrack = dst.stream.getAudioTracks()[0];
+    const sender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
+    if (sender) {
+      sender.replaceTrack(audioTrack);
+      setTimeout(() => {
+        const originalTrack = stream.getAudioTracks()[0];
+        if (originalTrack) sender.replaceTrack(originalTrack);
+      }, 900);
+    }
   } catch(e) {}
 }
 
@@ -140,11 +164,6 @@ async function toggleMic() {
     fetch('/signal/leave', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ peerId }) });
     location.reload();
   }
-}
-
-// Play tone locally on phone AND let WebRTC stream it to the speaker
-function sendMicTestSound() {
-  playTone(587.33); // D5 note test tone
 }
 
 // RECEIVER LOGIC
