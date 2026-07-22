@@ -192,7 +192,7 @@ async function handleOffer(o) {
   setInterval(async () => {
     try {
       const res = await fetch('/signal/candidates/' + o.peerId + '?from=sender');
-      const d = await r.json();
+      const d = await res.json();
       for (const c of d.candidates) await pcR.addIceCandidate(c);
     } catch(e) {}
   }, 700);
