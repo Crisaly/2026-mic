@@ -29,14 +29,15 @@
   <h2>Wireless Mic</h2>
   <input type="text" id="name" placeholder="Your Name">
   <button class="sing" id="micBtn" onclick="toggleMic()">Start Singing</button>
+  <button class="test" id="testBtn" onclick="sendMicTestSound()" style="display:none;">🔊 Mic Sound Test</button>
   <div id="meter">Mic Status: Ready</div>
   <button onclick="location.reload()" style="background:#444">Back</button>
 </div>
 
 <div id="receiver" class="view" style="width: 400px;">
   <h2>Speaker Hub</h2>
-  <button class="listen" id="listenBtn" onclick="startListen()">Start Listening</button>
-  <button class="test" onclick="playTestSound()">🔊 Sound Test</button>
+  <button class="listen" id="listenBtn" onclick="startListen()">Listening Live...</button>
+  <button class="test" onclick="playLocalTestSound()">🔊 Speaker Test Tone</button>
   <div class="panel">
     <h3>Connected Singers</h3>
     <div id="list">None</div>
@@ -51,31 +52,39 @@ function setRole(r) {
   role = r;
   document.getElementById('picker').classList.remove('active');
   document.getElementById(r === 'sing' ? 'sender' : 'receiver').classList.add('active');
+  if(r === 'listen') startListen();
 }
 
-// Sound Test for Speaker (iPad)
-function playTestSound() {
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.type = 'sine';
-  osc.frequency.setValueAtTime(440, ctx.currentTime); // A4 note
-  gain.gain.setValueAtTime(0.1, ctx.currentTime);
-  osc.connect(gain);
-  gain.connect(ctx.destination);
-  osc.start();
-  osc.stop(ctx.currentTime + 0.8);
+// Local Speaker Test
+function playLocalTestSound() {
+  playTone(440);
 }
 
-// SENDER LOGIC WITH VOICE ACTIVITY METER
+function playTone(freq) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.6);
+  } catch(e) {}
+}
+
+// SENDER LOGIC
 async function toggleMic() {
   const btn = document.getElementById('micBtn');
+  const testBtn = document.getElementById('testBtn');
   const meter = document.getElementById('meter');
+  
   if (!stream) {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       
-      // Voice activity visualizer setup using Web Audio API analyser
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const source = audioCtx.createMediaStreamSource(stream);
       const analyser = audioCtx.createAnalyser();
@@ -123,6 +132,7 @@ async function toggleMic() {
 
       btn.textContent = 'Stop Singing';
       btn.style.background = '#30d158';
+      testBtn.style.display = 'block';
     } catch(e) { alert('Mic error: ' + e.message); }
   } else {
     stream.getTracks().forEach(t => t.stop());
@@ -132,14 +142,17 @@ async function toggleMic() {
   }
 }
 
+// Play tone locally on phone AND let WebRTC stream it to the speaker
+function sendMicTestSound() {
+  playTone(587.33); // D5 note test tone
+}
+
 // RECEIVER LOGIC
-let audioCtx;
 async function startListen() {
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === 'suspended') {
     await audioCtx.resume();
   }
-  document.getElementById('listenBtn').textContent = 'Listening Live...';
   
   setInterval(async () => {
     try {
