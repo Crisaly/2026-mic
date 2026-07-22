@@ -6,7 +6,7 @@
 <title>Karaoke Mic</title>
 <style>
   body { background: #000; color: #fff; font-family: -apple-system, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; text-align: center; }
-  .view { display: none; flex-direction: column; gap: 20px; width: 300px; }
+  .view { display: none; flex-direction: column; gap: 20px; width: 320px; }
   .active { display: flex; }
   button { padding: 18px; font-size: 18px; border-radius: 12px; border: none; font-weight: bold; cursor: pointer; color: #fff; }
   .sing { background: #ff453a; }
@@ -16,6 +16,7 @@
   input { padding: 12px; font-size: 16px; border-radius: 8px; border: 1px solid #444; background: #1c1c1e; color: #fff; text-align: center; }
   .panel { background: #1c1c1e; padding: 15px; border-radius: 12px; text-align: left; margin-top: 10px; }
   #meter { font-weight: bold; color: #30d158; min-height: 24px; }
+  audio { width: 100%; margin-top: 10px; }
 </style>
 </head>
 <body>
@@ -37,11 +38,10 @@
 
 <div id="receiver" class="view" style="width: 400px;">
   <h2>Speaker Hub</h2>
-  <button class="unmute" onclick="forcePlayAudio()">🔊 1. Click Here to Enable Audio</button>
-  <button class="test" onclick="playLocalTone(440)">🔊 Speaker Test Tone</button>
   <div class="panel">
-    <h3>Connected Singers</h3>
-    <div id="list">None</div>
+    <h3>Connected Singers & Audio</h3>
+    <div id="list">None connected</div>
+    <div id="audio-container"></div>
   </div>
   <button onclick="location.reload()" style="background:#444">Back</button>
 </div>
@@ -54,34 +54,6 @@ function setRole(r) {
   document.getElementById('picker').classList.remove('active');
   document.getElementById(r === 'sing' ? 'sender' : 'receiver').classList.add('active');
   if(r === 'listen') startListen();
-}
-
-function playLocalTone(freq) {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(freq, ctx.currentTime);
-    gain.gain.setValueAtTime(0.2, ctx.currentTime);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.6);
-  } catch(e) {}
-}
-
-function forcePlayAudio() {
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  if (ctx.state === 'suspended') ctx.resume();
-  
-  let count = 0;
-  activePeers.forEach((audio, id) => {
-    audio.muted = false;
-    audio.volume = 1.0;
-    audio.play().then(() => { count++; }).catch(err => console.log(err));
-  });
-  alert("Audio unlocked! Active streams playing: " + count);
 }
 
 function streamTestTone() {
@@ -114,7 +86,6 @@ function streamTestTone() {
 async function toggleMic() {
   const btn = document.getElementById('micBtn');
   const testBtn = document.getElementById('testBtn');
-  const meter = document.getElementById('meter');
   
   if (!stream) {
     try {
@@ -168,13 +139,13 @@ async function handleOffer(o) {
   if (activePeers.has(o.peerId)) return;
   const pcR = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
   
-  // Immediately register peer so it shows up in activePeers
+  // Create an explicit interactive audio player with built-in controls so macOS can't block it
   const audio = document.createElement('audio');
   audio.autoplay = true;
+  audio.controls = true; // Shows standard play/volume controls on screen for manual user override
   audio.playsInline = true;
-  audio.controls = false;
-  audio.muted = false;
-  document.body.appendChild(audio);
+  
+  document.getElementById('audio-container').appendChild(audio);
   activePeers.set(o.peerId, audio);
   updateList();
 
@@ -182,7 +153,9 @@ async function handleOffer(o) {
   
   pcR.ontrack = e => {
     audio.srcObject = e.streams[0];
-    audio.play().catch(err => console.log(err));
+    audio.play().catch(err => {
+      console.log("Autoplay blocked, user interaction required via controls:", err);
+    });
   };
 
   await pcR.setRemoteDescription(o.sdp);
@@ -194,7 +167,7 @@ async function handleOffer(o) {
   setInterval(async () => {
     try {
       const res = await fetch('/signal/candidates/' + o.peerId + '?from=sender');
-      const d = await res.json();
+      const d = await r.json();
       for (const c of d.candidates) await pcR.addIceCandidate(c);
     } catch(e) {}
   }, 700);
@@ -202,7 +175,7 @@ async function handleOffer(o) {
 
 function updateList() {
   const list = document.getElementById('list');
-  list.innerHTML = activePeers.size === 0 ? 'None' : `${activePeers.size} singer(s) connected`;
+  list.innerHTML = activePeers.size === 0 ? 'None connected' : `${activePeers.size} singer(s) active:`;
 }
 </script>
 </body>
