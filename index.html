@@ -15,7 +15,7 @@
   .unmute { background: #30d158; }
   input { padding: 12px; font-size: 16px; border-radius: 8px; border: 1px solid #444; background: #1c1c1e; color: #fff; text-align: center; }
   .panel { background: #1c1c1e; padding: 15px; border-radius: 12px; text-align: left; margin-top: 10px; }
-  #meter { font-weight: bold; color: #30d158; min-height: 24px; }
+  #meter, #statusLog { font-weight: bold; color: #30d158; min-height: 24px; font-size: 14px; }
   audio { width: 100%; margin-top: 10px; }
 </style>
 </head>
@@ -31,7 +31,7 @@
   <h2>Wireless Mic</h2>
   <input type="text" id="name" placeholder="Your Name">
   <button class="sing" id="micBtn" onclick="toggleMic()">Start Singing</button>
-  <button class="test" id="testBtn" onclick="playPhoneTestTone()" style="display:none;">🔊 Play Sound on MacBook</button>
+  <button class="test" id="testBtn" onclick="playPhoneTestTone()" style="display:none;">🔊 Play Test Tone</button>
   <div id="meter">Mic Status: Ready</div>
   <button onclick="location.reload()" style="background:#444">Back</button>
 </div>
@@ -39,6 +39,7 @@
 <div id="receiver" class="view" style="width: 400px;">
   <h2>Speaker Hub</h2>
   <button class="unmute" onclick="forceAudioContext()">🔊 Click Here to Force Audio</button>
+  <div id="statusLog">Connection: Waiting...</div>
   <div class="panel">
     <h3>Connected Singers</h3>
     <div id="list">None connected</div>
@@ -68,10 +69,9 @@ function forceAudioContext() {
   activePeers.forEach((audio) => {
     audio.play().catch(e => console.log(e));
   });
-  alert("Audio unlocked! State: " + globalAudioCtx.state);
+  document.getElementById('statusLog').textContent = "Connection: Audio Unlocked (" + globalAudioCtx.state + ")";
 }
 
-// Play test tone directly through phone's Web Audio graph so it transmits over the active mic stream
 function playPhoneTestTone() {
   try {
     if (!phoneAudioCtx) {
@@ -83,17 +83,14 @@ function playPhoneTestTone() {
     const osc = phoneAudioCtx.createOscillator();
     const gain = phoneAudioCtx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(587.33, phoneAudioCtx.currentTime); // D5 note
+    osc.frequency.setValueAtTime(587.33, phoneAudioCtx.currentTime);
     gain.gain.setValueAtTime(0.5, phoneAudioCtx.currentTime);
-    
-    // Connect to phone speaker locally AND stream destination if possible
     osc.connect(gain);
     gain.connect(phoneAudioCtx.destination);
-    
     osc.start();
     osc.stop(phoneAudioCtx.currentTime + 1.0);
   } catch(e) {
-    alert("Test sound error: " + e.message);
+    alert("Test tone error: " + e.message);
   }
 }
 
@@ -116,20 +113,25 @@ async function toggleMic() {
       peerId = (await res.json()).peerId;
 
       setInterval(async () => {
-        const r = await fetch('/signal/answer/' + peerId);
-        const d = await r.json();
-        if (d.sdp && pc.remoteDescription.type === '') await pc.setRemoteDescription(d.sdp);
+        try {
+          const r = await fetch('/signal/answer/' + peerId);
+          const d = await r.json();
+          if (d.sdp && pc.remoteDescription.type === '') await pc.setRemoteDescription(d.sdp);
+        } catch(e){}
       }, 700);
 
       setInterval(async () => {
-        const r = await fetch('/signal/candidates/' + peerId + '?from=receiver');
-        const d = await r.json();
-        for (const c of d.candidates) await pc.addIceCandidate(c);
+        try {
+          const r = await fetch('/signal/candidates/' + peerId + '?from=receiver');
+          const d = await r.json();
+          for (const c of d.candidates) await pc.addIceCandidate(c);
+        } catch(e){}
       }, 700);
 
       btn.textContent = 'Stop Singing';
       btn.style.background = '#30d158';
       testBtn.style.display = 'block';
+      document.getElementById('meter').textContent = 'Mic Status: Live & Streaming';
     } catch(e) { alert('Mic error: ' + e.message); }
   } else {
     stream.getTracks().forEach(t => t.stop());
@@ -161,6 +163,10 @@ async function handleOffer(o) {
   activePeers.set(o.peerId, audio);
   updateList();
 
+  pcR.onconnectionstatechange = () => {
+    document.getElementById('statusLog').textContent = "Connection State: " + pcR.connectionState;
+  };
+
   pcR.onicecandidate = e => e.candidate && fetch('/signal/candidate', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ peerId: o.peerId, from: 'receiver', candidate: e.candidate }) });
   
   pcR.ontrack = e => {
@@ -177,7 +183,7 @@ async function handleOffer(o) {
   setInterval(async () => {
     try {
       const res = await fetch('/signal/candidates/' + o.peerId + '?from=sender');
-      const d = await r.json();
+      const d = await res.json();
       for (const c of d.candidates) await pcR.addIceCandidate(c);
     } catch(e) {}
   }, 700);
