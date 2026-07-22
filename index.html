@@ -15,7 +15,7 @@
   .unmute { background: #30d158; }
   input { padding: 12px; font-size: 16px; border-radius: 8px; border: 1px solid #444; background: #1c1c1e; color: #fff; text-align: center; }
   .panel { background: #1c1c1e; padding: 15px; border-radius: 12px; text-align: left; margin-top: 10px; }
-  #meter, #statusLog { font-weight: bold; color: #30d158; min-height: 24px; font-size: 14px; }
+  #meter, #statusLog { font-weight: bold; color: #ff9f0a; min-height: 24px; font-size: 14px; }
   audio { width: 100%; margin-top: 10px; }
 </style>
 </head>
@@ -38,8 +38,8 @@
 
 <div id="receiver" class="view" style="width: 400px;">
   <h2>Speaker Hub</h2>
-  <button class="unmute" onclick="forceAudioContext()">🔊 Click Here to Force Audio</button>
-  <div id="statusLog">Connection: Waiting...</div>
+  <button class="unmute" onclick="forceAudioContext()">🔊 1. Click Here to Enable Audio</button>
+  <div id="statusLog">Connection: Waiting for handshake...</div>
   <div class="panel">
     <h3>Connected Singers</h3>
     <div id="list">None connected</div>
@@ -51,6 +51,7 @@
 <script>
 let role = '', pc, stream, peerId = '', activePeers = new Map();
 let globalAudioCtx = null, phoneAudioCtx = null;
+const rtcConfig = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
 
 function setRole(r) {
   role = r;
@@ -69,7 +70,8 @@ function forceAudioContext() {
   activePeers.forEach((audio) => {
     audio.play().catch(e => console.log(e));
   });
-  document.getElementById('statusLog').textContent = "Connection: Audio Unlocked (" + globalAudioCtx.state + ")";
+  document.getElementById('statusLog').style.color = "#30d158";
+  document.getElementById('statusLog').textContent = "Audio Unlocked! State: " + globalAudioCtx.state;
 }
 
 function playPhoneTestTone() {
@@ -101,7 +103,7 @@ async function toggleMic() {
   if (!stream) {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      pc = new RTCPeerConnection(rtcConfig);
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
       
       pc.onicecandidate = e => e.candidate && fetch('/signal/candidate', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ peerId, from: 'sender', candidate: e.candidate }) });
@@ -153,7 +155,7 @@ async function startListen() {
 
 async function handleOffer(o) {
   if (activePeers.has(o.peerId)) return;
-  const pcR = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+  const pcR = new RTCPeerConnection(rtcConfig);
   
   const audio = document.createElement('audio');
   audio.autoplay = true;
@@ -164,7 +166,14 @@ async function handleOffer(o) {
   updateList();
 
   pcR.onconnectionstatechange = () => {
-    document.getElementById('statusLog').textContent = "Connection State: " + pcR.connectionState;
+    const state = pcR.connectionState;
+    const logEl = document.getElementById('statusLog');
+    logEl.textContent = "Connection State: " + state;
+    if (state === 'connected') {
+      logEl.style.color = "#30d158";
+    } else if (state === 'failed' || state === 'disconnected') {
+      logEl.style.color = "#ff453a";
+    }
   };
 
   pcR.onicecandidate = e => e.candidate && fetch('/signal/candidate', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ peerId: o.peerId, from: 'receiver', candidate: e.candidate }) });
@@ -183,7 +192,7 @@ async function handleOffer(o) {
   setInterval(async () => {
     try {
       const res = await fetch('/signal/candidates/' + o.peerId + '?from=sender');
-      const d = await res.json();
+      const d = await r.json();
       for (const c of d.candidates) await pcR.addIceCandidate(c);
     } catch(e) {}
   }, 700);
