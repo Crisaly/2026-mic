@@ -71,7 +71,6 @@ function playLocalTone(freq) {
   } catch(e) {}
 }
 
-// Forces every connected audio stream to play out loud on the MacBook
 function forcePlayAudio() {
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   if (ctx.state === 'suspended') ctx.resume();
@@ -80,11 +79,9 @@ function forcePlayAudio() {
   activePeers.forEach((audio, id) => {
     audio.muted = false;
     audio.volume = 1.0;
-    audio.play().then(() => {
-      count++;
-    }).catch(err => console.log("Play error:", err));
+    audio.play().then(() => { count++; }).catch(err => console.log(err));
   });
-  alert("Audio unlocked for " + count + " active stream(s)! Try testing the sound now.");
+  alert("Audio unlocked! Active streams playing: " + count);
 }
 
 function streamTestTone() {
@@ -114,7 +111,6 @@ function streamTestTone() {
   } catch(e) {}
 }
 
-// SENDER LOGIC
 async function toggleMic() {
   const btn = document.getElementById('micBtn');
   const testBtn = document.getElementById('testBtn');
@@ -123,29 +119,6 @@ async function toggleMic() {
   if (!stream) {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const source = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 512;
-      source.connect(analyser);
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
-      
-      setInterval(() => {
-        if (!stream) return;
-        analyser.getByteFrequencyData(dataArray);
-        let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-        let avg = sum / dataArray.length;
-        if (avg > 10) {
-          meter.textContent = "🎤 Voice Active (Speaking...)";
-          meter.style.color = "#30d158";
-        } else {
-          meter.textContent = "🎤 Connected (Silence)";
-          meter.style.color = "#8e8e93";
-        }
-      }, 200);
-
       pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
       
@@ -181,7 +154,6 @@ async function toggleMic() {
   }
 }
 
-// RECEIVER LOGIC
 async function startListen() {
   setInterval(async () => {
     try {
@@ -196,20 +168,21 @@ async function handleOffer(o) {
   if (activePeers.has(o.peerId)) return;
   const pcR = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
   
+  // Immediately register peer so it shows up in activePeers
+  const audio = document.createElement('audio');
+  audio.autoplay = true;
+  audio.playsInline = true;
+  audio.controls = false;
+  audio.muted = false;
+  document.body.appendChild(audio);
+  activePeers.set(o.peerId, audio);
+  updateList();
+
   pcR.onicecandidate = e => e.candidate && fetch('/signal/candidate', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ peerId: o.peerId, from: 'receiver', candidate: e.candidate }) });
   
   pcR.ontrack = e => {
-    const audio = document.createElement('audio');
     audio.srcObject = e.streams[0];
-    audio.autoplay = true;
-    audio.playsInline = true;
-    audio.controls = false;
-    audio.muted = false;
-    document.body.appendChild(audio);
-    
-    audio.play().catch(err => console.log("Audio play error:", err));
-    activePeers.set(o.peerId, audio);
-    updateList();
+    audio.play().catch(err => console.log(err));
   };
 
   await pcR.setRemoteDescription(o.sdp);
