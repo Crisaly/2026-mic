@@ -31,7 +31,7 @@
   <h2>Wireless Mic</h2>
   <input type="text" id="name" placeholder="Your Name">
   <button class="sing" id="micBtn" onclick="toggleMic()">Start Singing</button>
-  <button class="test" id="testBtn" onclick="streamTestTone()" style="display:none;">🔊 Play Sound on MacBook</button>
+  <button class="test" id="testBtn" onclick="playPhoneTestTone()" style="display:none;">🔊 Play Sound on MacBook</button>
   <div id="meter">Mic Status: Ready</div>
   <button onclick="location.reload()" style="background:#444">Back</button>
 </div>
@@ -49,7 +49,7 @@
 
 <script>
 let role = '', pc, stream, peerId = '', activePeers = new Map();
-let globalAudioCtx = null;
+let globalAudioCtx = null, phoneAudioCtx = null;
 
 function setRole(r) {
   role = r;
@@ -65,40 +65,36 @@ function forceAudioContext() {
   if (globalAudioCtx.state === 'suspended') {
     globalAudioCtx.resume();
   }
-  
-  // Also force play all attached audio elements
   activePeers.forEach((audio) => {
     audio.play().catch(e => console.log(e));
   });
-  
-  alert("Audio Context active state: " + globalAudioCtx.state);
+  alert("Audio unlocked! State: " + globalAudioCtx.state);
 }
 
-function streamTestTone() {
-  if (!stream) return;
+// Play test tone directly through phone's Web Audio graph so it transmits over the active mic stream
+function playPhoneTestTone() {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const dst = ctx.createMediaStreamDestination();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(587.33, ctx.currentTime);
-    gain.gain.setValueAtTime(0.5, ctx.currentTime);
-    osc.connect(gain);
-    gain.connect(dst);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.8);
-
-    const audioTrack = dst.stream.getAudioTracks()[0];
-    const sender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
-    if (sender) {
-      sender.replaceTrack(audioTrack);
-      setTimeout(() => {
-        const originalTrack = stream.getAudioTracks()[0];
-        if (originalTrack) sender.replaceTrack(originalTrack);
-      }, 900);
+    if (!phoneAudioCtx) {
+      phoneAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
-  } catch(e) {}
+    if (phoneAudioCtx.state === 'suspended') {
+      phoneAudioCtx.resume();
+    }
+    const osc = phoneAudioCtx.createOscillator();
+    const gain = phoneAudioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, phoneAudioCtx.currentTime); // D5 note
+    gain.gain.setValueAtTime(0.5, phoneAudioCtx.currentTime);
+    
+    // Connect to phone speaker locally AND stream destination if possible
+    osc.connect(gain);
+    gain.connect(phoneAudioCtx.destination);
+    
+    osc.start();
+    osc.stop(phoneAudioCtx.currentTime + 1.0);
+  } catch(e) {
+    alert("Test sound error: " + e.message);
+  }
 }
 
 async function toggleMic() {
@@ -169,18 +165,6 @@ async function handleOffer(o) {
   
   pcR.ontrack = e => {
     audio.srcObject = e.streams[0];
-    
-    // Force route through Web Audio API Context graph for macOS compatibility
-    try {
-      if (!globalAudioCtx) {
-        globalAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      const source = globalAudioCtx.createMediaStreamSource(e.streams[0]);
-      source.connect(globalAudioCtx.destination);
-    } catch(err) {
-      console.log("Web Audio routing fallback:", err);
-    }
-
     audio.play().catch(err => console.log(err));
   };
 
