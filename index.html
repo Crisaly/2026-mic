@@ -38,8 +38,9 @@
 
 <div id="receiver" class="view" style="width: 400px;">
   <h2>Speaker Hub</h2>
+  <button class="unmute" onclick="forceAudioContext()">🔊 Click Here to Force Audio</button>
   <div class="panel">
-    <h3>Connected Singers & Audio</h3>
+    <h3>Connected Singers</h3>
     <div id="list">None connected</div>
     <div id="audio-container"></div>
   </div>
@@ -48,12 +49,29 @@
 
 <script>
 let role = '', pc, stream, peerId = '', activePeers = new Map();
+let globalAudioCtx = null;
 
 function setRole(r) {
   role = r;
   document.getElementById('picker').classList.remove('active');
   document.getElementById(r === 'sing' ? 'sender' : 'receiver').classList.add('active');
   if(r === 'listen') startListen();
+}
+
+function forceAudioContext() {
+  if (!globalAudioCtx) {
+    globalAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (globalAudioCtx.state === 'suspended') {
+    globalAudioCtx.resume();
+  }
+  
+  // Also force play all attached audio elements
+  activePeers.forEach((audio) => {
+    audio.play().catch(e => console.log(e));
+  });
+  
+  alert("Audio Context active state: " + globalAudioCtx.state);
 }
 
 function streamTestTone() {
@@ -65,7 +83,7 @@ function streamTestTone() {
     const gain = ctx.createGain();
     osc.type = 'sine';
     osc.frequency.setValueAtTime(587.33, ctx.currentTime);
-    gain.gain.setValueAtTime(0.4, ctx.currentTime);
+    gain.gain.setValueAtTime(0.5, ctx.currentTime);
     osc.connect(gain);
     gain.connect(dst);
     osc.start();
@@ -139,12 +157,10 @@ async function handleOffer(o) {
   if (activePeers.has(o.peerId)) return;
   const pcR = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
   
-  // Create an explicit interactive audio player with built-in controls so macOS can't block it
   const audio = document.createElement('audio');
   audio.autoplay = true;
-  audio.controls = true; // Shows standard play/volume controls on screen for manual user override
+  audio.controls = true;
   audio.playsInline = true;
-  
   document.getElementById('audio-container').appendChild(audio);
   activePeers.set(o.peerId, audio);
   updateList();
@@ -153,9 +169,19 @@ async function handleOffer(o) {
   
   pcR.ontrack = e => {
     audio.srcObject = e.streams[0];
-    audio.play().catch(err => {
-      console.log("Autoplay blocked, user interaction required via controls:", err);
-    });
+    
+    // Force route through Web Audio API Context graph for macOS compatibility
+    try {
+      if (!globalAudioCtx) {
+        globalAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      const source = globalAudioCtx.createMediaStreamSource(e.streams[0]);
+      source.connect(globalAudioCtx.destination);
+    } catch(err) {
+      console.log("Web Audio routing fallback:", err);
+    }
+
+    audio.play().catch(err => console.log(err));
   };
 
   await pcR.setRemoteDescription(o.sdp);
