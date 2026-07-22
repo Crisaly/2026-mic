@@ -49,7 +49,7 @@
 </div>
 
 <script>
-let role = '', pc, stream, peerId = '', activePeers = new Map();
+let role = '', pc, stream, peerId = '', activePeers = new Map(), activeStreams = new Map();
 let globalAudioCtx = null, phoneAudioCtx = null;
 const rtcConfig = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
 
@@ -67,9 +67,17 @@ function forceAudioContext() {
   if (globalAudioCtx.state === 'suspended') {
     globalAudioCtx.resume();
   }
-  activePeers.forEach((audio) => {
-    audio.play().catch(e => console.log(e));
+  
+  // Force play and re-attach streams to all audio elements on user interaction
+  activePeers.forEach((audio, id) => {
+    if (activeStreams.has(id)) {
+      audio.srcObject = activeStreams.get(id);
+    }
+    audio.play().then(() => {
+      console.log("Audio playing successfully for " + id);
+    }).catch(e => console.log("Play error: ", e));
   });
+
   document.getElementById('statusLog').style.color = "#30d158";
   document.getElementById('statusLog').textContent = "Audio Unlocked! State: " + globalAudioCtx.state;
 }
@@ -179,8 +187,9 @@ async function handleOffer(o) {
   pcR.onicecandidate = e => e.candidate && fetch('/signal/candidate', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ peerId: o.peerId, from: 'receiver', candidate: e.candidate }) });
   
   pcR.ontrack = e => {
+    activeStreams.set(o.peerId, e.streams[0]);
     audio.srcObject = e.streams[0];
-    audio.play().catch(err => console.log(err));
+    audio.play().catch(err => console.log("Deferred play required:", err));
   };
 
   await pcR.setRemoteDescription(o.sdp);
