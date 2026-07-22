@@ -11,8 +11,10 @@
   button { padding: 18px; font-size: 18px; border-radius: 12px; border: none; font-weight: bold; cursor: pointer; color: #fff; }
   .sing { background: #ff453a; }
   .listen { background: #0a84ff; }
+  .test { background: #5856d6; }
   input { padding: 12px; font-size: 16px; border-radius: 8px; border: 1px solid #444; background: #1c1c1e; color: #fff; text-align: center; }
   .panel { background: #1c1c1e; padding: 15px; border-radius: 12px; text-align: left; margin-top: 10px; }
+  #meter { font-weight: bold; color: #30d158; min-height: 24px; }
 </style>
 </head>
 <body>
@@ -27,12 +29,14 @@
   <h2>Wireless Mic</h2>
   <input type="text" id="name" placeholder="Your Name">
   <button class="sing" id="micBtn" onclick="toggleMic()">Start Singing</button>
+  <div id="meter">Mic Status: Ready</div>
   <button onclick="location.reload()" style="background:#444">Back</button>
 </div>
 
 <div id="receiver" class="view" style="width: 400px;">
   <h2>Speaker Hub</h2>
   <button class="listen" id="listenBtn" onclick="startListen()">Start Listening</button>
+  <button class="test" onclick="playTestSound()">🔊 Sound Test</button>
   <div class="panel">
     <h3>Connected Singers</h3>
     <div id="list">None</div>
@@ -49,11 +53,51 @@ function setRole(r) {
   document.getElementById(r === 'sing' ? 'sender' : 'receiver').classList.add('active');
 }
 
+// Sound Test for Speaker (iPad)
+function playTestSound() {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(440, ctx.currentTime); // A4 note
+  gain.gain.setValueAtTime(0.1, ctx.currentTime);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + 0.8);
+}
+
+// SENDER LOGIC WITH VOICE ACTIVITY METER
 async function toggleMic() {
   const btn = document.getElementById('micBtn');
+  const meter = document.getElementById('meter');
   if (!stream) {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      
+      // Voice activity visualizer setup using Web Audio API analyser
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      
+      setInterval(() => {
+        if (!stream) return;
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+        let avg = sum / dataArray.length;
+        if (avg > 10) {
+          meter.textContent = "🎤 Voice Active (Speaking...)";
+          meter.style.color = "#30d158";
+        } else {
+          meter.textContent = "🎤 Connected (Silence)";
+          meter.style.color = "#8e8e93";
+        }
+      }, 200);
+
       pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
       
@@ -88,6 +132,7 @@ async function toggleMic() {
   }
 }
 
+// RECEIVER LOGIC
 let audioCtx;
 async function startListen() {
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -112,13 +157,12 @@ async function handleOffer(o) {
   pcR.onicecandidate = e => e.candidate && fetch('/signal/candidate', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ peerId: o.peerId, from: 'receiver', candidate: e.candidate }) });
   
   pcR.ontrack = e => {
-    // Explicitly configure audio element for iOS Safari playback compliance
     const audio = document.createElement('audio');
     audio.srcObject = e.streams[0];
     audio.autoplay = true;
     audio.playsInline = true;
     audio.controls = false;
-    document.body.appendChild(audio); // Attach to DOM to prevent garbage collection on iOS
+    document.body.appendChild(audio);
     
     audio.play().catch(err => console.log("Audio play error:", err));
     activePeers.set(o.peerId, audio);
@@ -142,7 +186,7 @@ async function handleOffer(o) {
 
 function updateList() {
   const list = document.getElementById('list');
-  list.innerHTML = activePeers.size === 0 ? 'None' : `${activePeers.size} singer(s) connected`;
+  list.innerHTML = activePeers.size === 0 ? 'None' : `${activePeers.size} singer(s) connected (Live Audio Active)`;
 }
 </script>
 </body>
