@@ -49,15 +49,40 @@
 </div>
 
 <script>
-let role = '', pc, stream, peerId = '', activePeers = new Map();
+let role = '', pc, stream, ws;
 let globalAudioCtx = null, phoneAudioCtx = null;
 const rtcConfig = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
 
+function connectSignaling() {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${protocol}//${location.host}`);
+  
+  ws.onmessage = async (event) => {
+    const msg = JSON.parse(event.data);
+    
+    if (role === 'listen') {
+      if (msg.type === 'offer') {
+        await handleOffer(msg);
+      } else if (msg.type === 'candidate' && pc && pc.remoteDescription) {
+        try { await pc.addIceCandidate(msg.candidate); } catch(e){}
+      }
+    } else if (role === 'sing') {
+      if (msg.type === 'answer' && pc) {
+        if (!pc.currentRemoteDescription) {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+        }
+      } else if (msg.type === 'candidate' && pc && pc.remoteDescription) {
+        try { await pc.addIceCandidate(msg.candidate); } catch(e){}
+      }
+    }
+  };
+}
+
 function setRole(r) {
   role = r;
+  connectSignaling();
   document.getElementById('picker').classList.remove('active');
   document.getElementById(r === 'sing' ? 'sender' : 'receiver').classList.add('active');
-  if(r === 'listen') startListen();
 }
 
 function forceAudioContext() {
@@ -67,11 +92,7 @@ function forceAudioContext() {
   if (globalAudioCtx.state === 'suspended') {
     globalAudioCtx.resume();
   }
-  
-  activePeers.forEach((audio) => {
-    audio.play().catch(e => console.log("Play error: ", e));
-  });
-
+  document.querySelectorAll('audio').forEach(audio => audio.play().catch(e => {}));
   document.getElementById('statusLog').style.color = "#30d158";
   document.getElementById('statusLog').textContent = "Audio Unlocked! State: " + globalAudioCtx.state;
 }
@@ -108,29 +129,16 @@ async function toggleMic() {
       pc = new RTCPeerConnection(rtcConfig);
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
       
-      pc.onicecandidate = e => e.candidate && fetch('/signal/candidate', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ peerId, from: 'sender', candidate: e.candidate }) });
+      pc.onicecandidate = e => {
+        if (e.candidate) {
+          ws.send(JSON.stringify({ type: 'candidate', candidate: e.candidate }));
+        }
+      };
       
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       
-      const res = await fetch('/signal/offer', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sdp: offer, name: document.getElementById('name').value || 'Singer' }) });
-      peerId = (await res.json()).peerId;
-
-      setInterval(async () => {
-        try {
-          const r = await fetch('/signal/answer/' + peerId);
-          const d = await r.json();
-          if (d.sdp && pc.remoteDescription.type === '') await pc.setRemoteDescription(d.sdp);
-        } catch(e){}
-      }, 700);
-
-      setInterval(async () => {
-        try {
-          const r = await fetch('/signal/candidates/' + peerId + '?from=receiver');
-          const d = await r.json();
-          for (const c of d.candidates) await pc.addIceCandidate(c);
-        } catch(e){}
-      }, 700);
+      ws.send(JSON.stringify({ type: 'offer', sdp: offer, name: document.getElementById('name').value || 'Singer' }));
 
       btn.textContent = 'Stop Singing';
       btn.style.background = '#30d158';
@@ -140,35 +148,23 @@ async function toggleMic() {
   } else {
     stream.getTracks().forEach(t => t.stop());
     if (pc) pc.close();
-    fetch('/signal/leave', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ peerId }) });
     location.reload();
   }
 }
 
-async function startListen() {
-  setInterval(async () => {
-    try {
-      const res = await fetch('/signal/offers');
-      const data = await res.json();
-      for (const o of data.offers) handleOffer(o);
-    } catch(e) {}
-  }, 1000);
-}
-
-async function handleOffer(o) {
-  if (activePeers.has(o.peerId)) return;
-  const pcR = new RTCPeerConnection(rtcConfig);
+async function handleOffer(msg) {
+  if (pc) return; // Handle 1 active stream connection
+  pc = new RTCPeerConnection(rtcConfig);
   
   const audio = document.createElement('audio');
   audio.autoplay = true;
   audio.controls = true;
   audio.playsInline = true;
   document.getElementById('audio-container').appendChild(audio);
-  activePeers.set(o.peerId, audio);
-  updateList();
+  document.getElementById('list').textContent = `1 singer(s) active (${msg.name}):`;
 
-  pcR.onconnectionstatechange = () => {
-    const state = pcR.connectionState;
+  pc.onconnectionstatechange = () => {
+    const state = pc.connectionState;
     const logEl = document.getElementById('statusLog');
     logEl.textContent = "Connection State: " + state;
     if (state === 'connected') {
@@ -178,42 +174,30 @@ async function handleOffer(o) {
     }
   };
 
-  pcR.onicecandidate = e => e.candidate && fetch('/signal/candidate', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ peerId: o.peerId, from: 'receiver', candidate: e.candidate }) });
+  pc.onicecandidate = e => {
+    if (e.candidate) {
+      ws.send(JSON.stringify({ type: 'candidate', candidate: e.candidate }));
+    }
+  };
   
-  pcR.ontrack = e => {
+  pc.ontrack = e => {
     audio.srcObject = e.streams[0];
-    audio.play().catch(err => console.log("Play blocked:", err));
-
-    // Force route stream through Web Audio API Context to guarantee physical output
+    audio.play().catch(err => console.log("Autoplay blocked, click audio button"));
+    
     if (!globalAudioCtx) {
       globalAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
     try {
       const sourceNode = globalAudioCtx.createMediaStreamSource(e.streams[0]);
       sourceNode.connect(globalAudioCtx.destination);
-    } catch(err) {
-      console.log("Web Audio routing error:", err);
-    }
+    } catch(err) {}
   };
 
-  await pcR.setRemoteDescription(o.sdp);
-  const answer = await pcR.createAnswer();
-  await pcR.setLocalDescription(answer);
+  await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
 
-  await fetch('/signal/answer', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ peerId: o.peerId, sdp: answer }) });
-
-  setInterval(async () => {
-    try {
-      const res = await fetch('/signal/candidates/' + o.peerId + '?from=sender');
-      const d = await r.json();
-      for (const c of d.candidates) await pcR.addIceCandidate(c);
-    } catch(e) {}
-  }, 700);
-}
-
-function updateList() {
-  const list = document.getElementById('list');
-  list.innerHTML = activePeers.size === 0 ? 'None connected' : `${activePeers.size} singer(s) active:`;
+  ws.send(JSON.stringify({ type: 'answer', sdp: answer }));
 }
 </script>
 </body>
