@@ -91,7 +91,9 @@ async function toggleMic() {
 let audioCtx;
 async function startListen() {
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  await audioCtx.resume();
+  if (audioCtx.state === 'suspended') {
+    await audioCtx.resume();
+  }
   document.getElementById('listenBtn').textContent = 'Listening Live...';
   
   setInterval(async () => {
@@ -110,10 +112,15 @@ async function handleOffer(o) {
   pcR.onicecandidate = e => e.candidate && fetch('/signal/candidate', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ peerId: o.peerId, from: 'receiver', candidate: e.candidate }) });
   
   pcR.ontrack = e => {
+    // Explicitly configure audio element for iOS Safari playback compliance
     const audio = document.createElement('audio');
     audio.srcObject = e.streams[0];
     audio.autoplay = true;
-    audio.play();
+    audio.playsInline = true;
+    audio.controls = false;
+    document.body.appendChild(audio); // Attach to DOM to prevent garbage collection on iOS
+    
+    audio.play().catch(err => console.log("Audio play error:", err));
     activePeers.set(o.peerId, audio);
     updateList();
   };
